@@ -1,94 +1,212 @@
 #include "main.h"
+#include "lemlib/api.hpp" // IWYU pragma: keep
+#include "lemlib/chassis/chassis.hpp"
+#include "lemlib/chassis/trackingWheel.hpp"
+#include "pros/imu.hpp"
+#include "pros/llemu.hpp"
+#include "pros/misc.h"
+#include "pros/motor_group.hpp"
+#include "pros/rtos.hpp"
+#include <sys/_intsup.h>
 
-/**
- * A callback function for LLEMU's center button.
- *
- * When this callback is fired, it will toggle line 2 of the LCD text between
- * "I was pressed!" and nothing.
- */
-void on_center_button() {
-	static bool pressed = false;
-	pressed = !pressed;
-	if (pressed) {
-		pros::lcd::set_text(2, "I was pressed!");
+// =========================================================
+// Robot configuration
+// =========================================================
+
+// The main controller used to drive the robot
+pros::Controller master(pros::E_CONTROLLER_MASTER);
+
+// Left and right drive motors for the drivetrain.
+pros::MotorGroup leftDt({1,2,3}, pros::MotorGearset::green);
+pros::MotorGroup rightDt({4,5,6}, pros::MotorGearset::green);
+
+// Sensors used for odometry and orientation.
+// The IMU provides heading data; the two rotations track wheel movement.
+pros::Imu imu(7);
+pros::Rotation horizontal(8);
+pros::Rotation vertical(9);
+
+// Tracking wheels attached to the horizontal and vertical odometry axes.
+// These help LemLib estimate the robot's position on the field.
+lemlib::TrackingWheel horizontalTracker(
+	&horizontal, 
+	lemlib::Omniwheel::NEW_2, 
+	0
+);
+lemlib::TrackingWheel verticalTracker(
+	&vertical, 
+	lemlib::Omniwheel::NEW_2, 
+	0
+);
+
+// Tell LemLib which sensors are being used for odometry.
+lemlib::OdomSensors sensors(
+	&verticalTracker, 
+	nullptr,
+	&horizontalTracker, 
+	nullptr,
+	&imu
+);
+
+// Drivetrain tuning values for the robot's physical dimensions and drive setup.
+// This defines the motor group, wheel size, gear ratio, and other chassis info.
+lemlib::Drivetrain drive(
+	&leftDt, 
+	&rightDt,
+	10,
+	lemlib::Omniwheel::NEW_325,
+	360,
+	2
+);
+
+// PID settings for lateral movement (forward/backward positioning).
+// These values tune how the robot corrects for drift and error while driving.
+lemlib::ControllerSettings lateral(
+	10,
+	0,
+	3,
+	3,
+	1,
+	100,
+	3,
+	500,
+	20
+);
+
+// PID settings for angular movement (turning and heading control).
+lemlib::ControllerSettings angular(
+	3,
+	0,
+	10,
+	3,
+	1,
+	100,
+	3,
+	500,
+	0
+);
+
+// input curve for throttle input during driver control
+lemlib::ExpoDriveCurve throttle_curve(
+	3, // joystick deadband out of 127
+    10, // minimum output where drivetrain will move out of 127
+    1.019 // expo curve gain
+);
+
+// input curve for steer input during driver control
+lemlib::ExpoDriveCurve steer_curve(
+	3, // joystick deadband out of 127
+    10, // minimum output where drivetrain will move out of 127
+    1.019 // expo curve gain
+);
+// Build the chassis object using the drivetrain, PID settings, and sensors.
+lemlib::Chassis chassis(
+	drive,
+	lateral,
+	angular,
+	sensors,
+	&throttle_curve,
+	&steer_curve
+);
+
+int auton = 0;
+
+// =========================================================
+// Robot startup
+// =========================================================
+void selectorHelper() {
+	std::string autoNames[3] = {"Left", "Right", "Skills"};
+		master.print(0, 0, "Auton: %s", autoNames[auton].c_str());
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+			auton++;
+			if (auton > 2) auton = 0;
+			while (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+				pros::delay(20);
+			}
+		}
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) {
+			auton--;
+			if (auton < 0) auton = 2;
+			while (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) {
+				pros::delay(20);
+			}
+		}
+
+		pros::delay(50);
+}
+void autoSelector(bool manual = false) {
+	if (!manual) {
+		while (!pros::competition::is_autonomous() && pros::competition::is_connected()) {
+			selectorHelper();
+		}
 	} else {
-		pros::lcd::clear_line(2);
+		while (!(master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT))) {
+			selectorHelper();
+		}
 	}
-}
+	
 
-/**
- * Runs initialization code. This occurs as soon as the program is started.
- *
- * All other competition modes are blocked by initialize; it is recommended
- * to keep execution time for this mode under a few seconds.
- */
+}
 void initialize() {
+	// Initialize the V5 LCD screen for debug output.
 	pros::lcd::initialize();
-	pros::lcd::set_text(1, "Hello PROS User!");
 
-	pros::lcd::register_btn1_cb(on_center_button);
+	// Calibrate the chassis before autonomous/opcontrol begins.
+	chassis.calibrate();
+
+	// Background task that continuously prints the robot's current field position.
+	pros::Task displayInfo([&]() {
+		while (true) {
+			pros::lcd::print(0, "X: %f", chassis.getPose().x);
+			pros::lcd::print(1, "Y: %f", chassis.getPose().y);
+			pros::lcd::print(2, "Theta: %f", chassis.getPose().theta);
+			pros::delay(20);
+		}
+	});
+
+	autoSelector();
 }
 
-/**
- * Runs while the robot is in the disabled state of Field Management System or
- * the VEX Competition Switch, following either autonomous or opcontrol. When
- * the robot is enabled, this task will exit.
- */
-void disabled() {}
+void leftAuton() {
+	
+}
+void rightAuton() {
+	
+}
+void skillsAuton() {
+	
+}
 
-/**
- * Runs after initialize(), and before autonomous when connected to the Field
- * Management System or the VEX Competition Switch. This is intended for
- * competition-specific initialization routines, such as an autonomous selector
- * on the LCD.
- *
- * This task will exit when the robot is enabled and autonomous or opcontrol
- * starts.
- */
-void competition_initialize() {}
-
-/**
- * Runs the user autonomous code. This function will be started in its own task
- * with the default priority and stack size whenever the robot is enabled via
- * the Field Management System or the VEX Competition Switch in the autonomous
- * mode. Alternatively, this function may be called in initialize or opcontrol
- * for non-competition testing purposes.
- *
- * If the robot is disabled or communications is lost, the autonomous task
- * will be stopped. Re-enabling the robot will restart the task, not re-start it
- * from where it left off.
- */
-void autonomous() {}
-
-/**
- * Runs the operator control code. This function will be started in its own task
- * with the default priority and stack size whenever the robot is enabled via
- * the Field Management System or the VEX Competition Switch in the operator
- * control mode.
- *
- * If no competition control is connected, this function will run immediately
- * following initialize().
- *
- * If the robot is disabled or communications is lost, the
- * operator control task will be stopped. Re-enabling the robot will restart the
- * task, not resume it from where it left off.
- */
-void opcontrol() {
-	pros::Controller master(pros::E_CONTROLLER_MASTER);
-	pros::MotorGroup left_mg({1, -2, 3});    // Creates a motor group with forwards ports 1 & 3 and reversed port 2
-	pros::MotorGroup right_mg({-4, 5, -6});  // Creates a motor group with forwards port 5 and reversed ports 4 & 6
-
-
-	while (true) {
-		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
-		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
-		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
-
-		// Arcade control scheme
-		int dir = master.get_analog(ANALOG_LEFT_Y);    // Gets amount forward/backward from left joystick
-		int turn = master.get_analog(ANALOG_RIGHT_X);  // Gets the turn left/right from right joystick
-		left_mg.move(dir - turn);                      // Sets left motor voltage
-		right_mg.move(dir + turn);                     // Sets right motor voltage
-		pros::delay(20);                               // Run for 20 ms then update
+void runAuto() {
+	switch (auton) {
+		case 0: leftAuton(); break;
+		case 1: rightAuton(); break;
+		case 2: skillsAuton(); break;
+		default: break;
 	}
+}
+
+void opcontrol() {
+	while (true) {
+		// Drive the robot using tank controls from the master controller.
+		chassis.tank(master.get_analog(ANALOG_LEFT_Y), master.get_analog(ANALOG_RIGHT_Y));
+		pros::delay(20);
+
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)&& master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+			while (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+				pros::delay(20);
+			}
+			autoSelector(true);
+		}
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)) {
+			while (master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)) {
+				pros::delay(20);
+			}
+			runAuto();
+		}
+	}
+}
+
+void autonomous() {
+	runAuto();
 }
