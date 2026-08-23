@@ -17,8 +17,8 @@
 pros::Controller master(pros::E_CONTROLLER_MASTER);
 
 // Left and right drive motors for the drivetrain.
-pros::MotorGroup leftDt({1,2,3}, pros::MotorGearset::green);
-pros::MotorGroup rightDt({4,5,6}, pros::MotorGearset::green);
+pros::MotorGroup leftDt({1,2,3}, pros::MotorGearset::blue);
+pros::MotorGroup rightDt({4,5,6}, pros::MotorGearset::blue);
 
 // Sensors used for odometry and orientation.
 // The IMU provides heading data; the two rotations track wheel movement.
