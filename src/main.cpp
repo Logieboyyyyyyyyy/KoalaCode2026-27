@@ -116,23 +116,24 @@ int auton = 0;
 // =========================================================
 void selectorHelper() {
 	std::string autoNames[3] = {"Left", "Right", "Skills"};
-		master.print(0, 0, "Auton: %s", autoNames[auton].c_str());
-		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
-			auton++;
-			if (auton > 2) auton = 0;
-			while (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
-				pros::delay(20);
-			}
+	master.clear();
+	master.print(0, 0, "Auton: %s", autoNames[auton].c_str());
+	if (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+		auton++;
+		if (auton > 2) auton = 0;
+		while (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+			pros::delay(20);
 		}
-		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) {
-			auton--;
-			if (auton < 0) auton = 2;
-			while (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) {
-				pros::delay(20);
-			}
+	}
+	if (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) {
+		auton--;
+		if (auton < 0) auton = 2;
+		while (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) {
+			pros::delay(20);
 		}
+	}
 
-		pros::delay(50);
+	pros::delay(50);
 }
 void autoSelector(bool manual = false) {
 	if (!manual) {
