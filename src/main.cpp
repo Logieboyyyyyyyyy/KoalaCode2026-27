@@ -141,7 +141,10 @@ void autoSelector(bool manual = false) {
 			selectorHelper();
 		}
 	} else {
-		while (!(master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT))) {
+		while (!(
+			master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) &&
+			master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT))
+		) {
 			selectorHelper();
 		}
 	}
@@ -190,17 +193,32 @@ void runAuto() {
 void opcontrol() {
 	while (true) {
 		// Drive the robot using tank controls from the master controller.
-		chassis.tank(master.get_analog(ANALOG_LEFT_Y), master.get_analog(ANALOG_RIGHT_Y));
+		chassis.tank(
+			master.get_analog(ANALOG_LEFT_Y), 
+			master.get_analog(ANALOG_RIGHT_Y));
 		pros::delay(20);
 
-		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)&& master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
-			while (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+		if (
+			master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && 
+			master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)
+		) {
+
+			while (
+				master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && 
+				master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)
+			) {
 				pros::delay(20);
 			}
 			autoSelector(true);
 		}
-		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)) {
-			while (master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)) {
+		if (
+			master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
+			master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
+		) {
+			while (
+				master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
+				master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
+			) {
 				pros::delay(20);
 			}
 			runAuto();
