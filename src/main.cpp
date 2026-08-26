@@ -1,13 +1,18 @@
+// Include the vector library
 #include "main.h"
 #include "lemlib/api.hpp" // IWYU pragma: keep
 #include "lemlib/chassis/chassis.hpp"
 #include "lemlib/chassis/trackingWheel.hpp"
+#include "liblvgl/llemu.hpp"
 #include "pros/imu.hpp"
 #include "pros/llemu.hpp"
 #include "pros/misc.h"
+#include "pros/misc.hpp"
 #include "pros/motor_group.hpp"
 #include "pros/rtos.hpp"
+#include <cstdio>
 #include <sys/_intsup.h>
+#include <string.h>
 
 // =========================================================
 // Robot configuration
@@ -20,14 +25,12 @@ pros::Controller master(pros::E_CONTROLLER_MASTER);
 pros::MotorGroup leftDt({1,2,3}, pros::MotorGearset::blue);
 pros::MotorGroup rightDt({4,5,6}, pros::MotorGearset::blue);
 
-// Sensors used for odometry and orientation.
-// The IMU provides heading data; the two rotations track wheel movement.
+// Sensors for odometry
 pros::Imu imu(7);
 pros::Rotation horizontal(8);
 pros::Rotation vertical(9);
 
-// Tracking wheels attached to the horizontal and vertical odometry axes.
-// These help LemLib estimate the robot's position on the field.
+// Define the rotaion sensors as tracking wheels for odometry.
 lemlib::TrackingWheel horizontalTracker(
 	&horizontal, 
 	lemlib::Omniwheel::NEW_2, 
@@ -48,19 +51,17 @@ lemlib::OdomSensors sensors(
 	&imu
 );
 
-// Drivetrain tuning values for the robot's physical dimensions and drive setup.
-// This defines the motor group, wheel size, gear ratio, and other chassis info.
+// Drivetrain values for the robot's physical dimensions and drive setup.
 lemlib::Drivetrain drive(
 	&leftDt, 
 	&rightDt,
 	10,
-	lemlib::Omniwheel::NEW_325,
-	360,
+	lemlib::Omniwheel::NEW_275,
+	450,
 	2
 );
 
-// PID settings for lateral movement (forward/backward positioning).
-// These values tune how the robot corrects for drift and error while driving.
+// PID settings for lateral movement
 lemlib::ControllerSettings lateral(
 	10,
 	0,
@@ -73,7 +74,7 @@ lemlib::ControllerSettings lateral(
 	20
 );
 
-// PID settings for angular movement (turning and heading control).
+// PID settings for angular movement
 lemlib::ControllerSettings angular(
 	3,
 	0,
@@ -99,6 +100,7 @@ lemlib::ExpoDriveCurve steer_curve(
     10, // minimum output where drivetrain will move out of 127
     1.019 // expo curve gain
 );
+
 // Build the chassis object using the drivetrain, PID settings, and sensors.
 lemlib::Chassis chassis(
 	drive,
@@ -112,9 +114,9 @@ lemlib::Chassis chassis(
 int auton = 0;
 
 // =========================================================
-// Robot startup
+// Autonomous selector
 // =========================================================
-void selectorHelper() {
+void selectorHelper() { //TODO: Change this to use brain screen becasue buttons disabled when on feild
 	std::string autoNames[3] = {"Left", "Right", "Skills"};
 	master.clear();
 	master.print(0, 0, "Auton: %s", autoNames[auton].c_str());
@@ -133,8 +135,9 @@ void selectorHelper() {
 		}
 	}
 
-	pros::delay(50);
+	pros::delay(500);
 }
+
 void autoSelector(bool manual = false) {
 	if (!manual) {
 		while (!pros::competition::is_autonomous() && pros::competition::is_connected()) {
@@ -151,6 +154,26 @@ void autoSelector(bool manual = false) {
 	
 
 }
+
+// =========================================================
+// Hot Motor Detection
+// =========================================================
+std::string hotMotors() {
+	std::string hotMotors = "";
+	for (int i = 0; i < 3; i++) {
+		if (leftDt.is_over_temp(i)) {
+			hotMotors += "Left-Drivetrain " + std::to_string(i) + " ";
+		}
+		if (rightDt.is_over_temp(i)) {
+			hotMotors += "Right-Drivetrain " + std::to_string(i) + " ";
+		}
+	}
+	return hotMotors;
+}
+
+// =========================================================
+// Robot startup
+// =========================================================
 void initialize() {
 	// Initialize the V5 LCD screen for debug output.
 	pros::lcd::initialize();
@@ -161,16 +184,22 @@ void initialize() {
 	// Background task that continuously prints the robot's current field position.
 	pros::Task displayInfo([&]() {
 		while (true) {
+			printf("X: %f Y: %f Theta: %f\n", chassis.getPose().x,chassis.getPose().y,chassis.getPose().theta);
 			pros::lcd::print(0, "X: %f", chassis.getPose().x);
 			pros::lcd::print(1, "Y: %f", chassis.getPose().y);
 			pros::lcd::print(2, "Theta: %f", chassis.getPose().theta);
-			pros::delay(20);
+			// pros::lcd::print(3, "Hot Motors: %s", hotMotors().c_str());
+			pros::delay(500);
 		}
 	});
 
-	autoSelector();
+
+	// autoSelector(); // Not implemented yet
 }
 
+// =========================================================
+// Autonomous routines
+// =========================================================
 void leftAuton() {
 	
 }
@@ -188,17 +217,53 @@ void runAuto() {
 		case 2: skillsAuton(); break;
 		default: break;
 	}
+	master.rumble(". . .");
 }
 
-void opcontrol() {
+// =========================================================
+// Run match timer and display it along with
+// important information on controller
+// =========================================================
+void controlerDisplay() {
+	int timer = 105000;
 	while (true) {
-		// Drive the robot using tank controls from the master controller.
-		chassis.tank(
-			master.get_analog(ANALOG_LEFT_Y), 
-			master.get_analog(ANALOG_RIGHT_Y));
-		pros::delay(20);
+		if (pros::competition::is_connected()) {
+			if (
+				!pros::competition::is_disabled() &&
+				!pros::competition::is_autonomous()
+			) {
+				master.clear_line(2);
+				master.print(2, 0, "Time (seconds): %d", timer/1000);
+				pros::delay(50);
+				timer -= 50;
+				if (timer == 15000) {
+					master.rumble("---");
+				}
+			} 
+		} else {
+			timer = 105000;
+			pros::delay(50);
+		}
+	}
+}
 
+// =========================================================
+// Driver control
+// =========================================================
+void opcontrol() { //TODO: clean all this up
+	pros::Task drive([&]() { //Temporarly using a task 
+		while (true) {
+			chassis.tank(
+				master.get_analog(ANALOG_LEFT_Y), 
+				master.get_analog(ANALOG_RIGHT_Y));
+			pros::delay(20);
+		}
+	});
+	pros::Task condisplay(controlerDisplay);
+
+	while (true) {		
 		if (
+			!pros::competition::is_connected() &&
 			master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && 
 			master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)
 		) {
@@ -207,22 +272,29 @@ void opcontrol() {
 				master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && 
 				master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)
 			) {
+
 				pros::delay(20);
 			}
+
 			autoSelector(true);
 		}
+
 		if (
+			!pros::competition::is_connected() &&
 			master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
 			master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
 		) {
+
 			while (
 				master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
 				master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
 			) {
+
 				pros::delay(20);
 			}
 			runAuto();
 		}
+		pros::delay(20);
 	}
 }
 
