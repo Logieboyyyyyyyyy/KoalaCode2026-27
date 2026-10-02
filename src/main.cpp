@@ -3,7 +3,10 @@
 #include "lemlib/api.hpp" // IWYU pragma: keep
 #include "lemlib/chassis/chassis.hpp"
 #include "lemlib/chassis/trackingWheel.hpp"
+#include "lemlib/pid.hpp"
+#include "liblvgl/llemu.h"
 #include "liblvgl/llemu.hpp"
+#include "pros/abstract_motor.hpp"
 #include "pros/imu.hpp"
 #include "pros/llemu.hpp"
 #include "pros/misc.h"
@@ -12,7 +15,8 @@
 #include "pros/rtos.hpp"
 #include <cstdio>
 #include <sys/_intsup.h>
-#include <string.h>
+#include <vector>
+
 
 // =========================================================
 // Robot configuration
@@ -20,6 +24,8 @@
 
 // The main controller used to drive the robot
 pros::Controller master(pros::E_CONTROLLER_MASTER);
+
+pros::MotorGroup cascade({10, -11}, pros::MotorGearset::blue);
 
 // Left and right drive motors for the drivetrain.
 pros::MotorGroup leftDt({1,2,3}, pros::MotorGearset::blue);
@@ -87,6 +93,15 @@ lemlib::ControllerSettings angular(
 	0
 );
 
+// PID settings for the cascade mechanism
+lemlib::PID cascadePID(
+	1,
+	0,
+	0,
+	0,
+	false
+);
+
 // input curve for throttle input during driver control
 lemlib::ExpoDriveCurve throttle_curve(
 	3, // joystick deadband out of 127
@@ -111,54 +126,17 @@ lemlib::Chassis chassis(
 	&steer_curve
 );
 
+//Static variables
+bool DEBUG = true;
+std::vector<std::string> AUTOS = {"left", "right", "skills"};
+
+//Non Static variables
 int auton = 0;
+bool inputsEnabled = false;
 
-// =========================================================
-// Autonomous selector
-// =========================================================
-void selectorHelper() { //TODO: Change this to use brain screen becasue buttons disabled when on feild
-	std::string autoNames[3] = {"Left", "Right", "Skills"};
-	master.clear();
-	master.print(0, 0, "Auton: %s", autoNames[auton].c_str());
-	if (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
-		auton++;
-		if (auton > 2) auton = 0;
-		while (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
-			pros::delay(20);
-		}
-	}
-	if (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) {
-		auton--;
-		if (auton < 0) auton = 2;
-		while (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) {
-			pros::delay(20);
-		}
-	}
-
-	pros::delay(500);
-}
-
-void autoSelector(bool manual = false) {
-	if (!manual) {
-		while (!pros::competition::is_autonomous() && pros::competition::is_connected()) {
-			selectorHelper();
-		}
-	} else {
-		while (!(
-			master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) &&
-			master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT))
-		) {
-			selectorHelper();
-		}
-	}
-	
-
-}
-
-// =========================================================
 // Hot Motor Detection
-// =========================================================
 std::string hotMotors() {
+	if (DEBUG) {printf("hotMotors\n");}
 	std::string hotMotors = "";
 	for (int i = 0; i < 3; i++) {
 		if (leftDt.is_over_temp(i)) {
@@ -168,49 +146,79 @@ std::string hotMotors() {
 			hotMotors += "Right-Drivetrain " + std::to_string(i) + " ";
 		}
 	}
+	if (cascade.is_over_temp(0)) {
+		hotMotors += "Cascade 0";
+	}
+	if (cascade.is_over_temp(1)) {
+		hotMotors += "Cascade 1";
+	}
+
 	return hotMotors;
 }
 
-// =========================================================
+void autoSelector(){
+	if (DEBUG) {printf("autoSelector\n");}
+	if (pros::lcd::read_buttons() == LCD_BTN_LEFT) {
+		auton--;
+		if (auton < 0) {
+			auton = AUTOS.size()-1;
+		}
+		while (pros::lcd::read_buttons() == LCD_BTN_LEFT) {
+			pros::delay(50);
+		}
+	} else if (pros::lcd::read_buttons() == LCD_BTN_RIGHT) {
+		auton++;
+		if (auton > AUTOS.size()-1) {
+			auton = 0;
+		}
+		while (pros::lcd::read_buttons() == LCD_BTN_RIGHT) {
+			pros::delay(50);
+		}
+	}
+}
+
 // Robot startup
-// =========================================================
 void initialize() {
-	// Initialize the V5 LCD screen for debug output.
+	if (DEBUG) {printf("initialize\n");}
+	// Initialize the V5 LCD screen for DEBUG output.
 	pros::lcd::initialize();
 
 	// Calibrate the chassis before autonomous/opcontrol begins.
 	chassis.calibrate();
+	cascade.set_zero_position(cascade.get_position());
 
 	// Background task that continuously prints the robot's current field position.
 	pros::Task displayInfo([&]() {
 		while (true) {
-			printf("X: %f Y: %f Theta: %f\n", chassis.getPose().x,chassis.getPose().y,chassis.getPose().theta);
+			// printf("X: %f Y: %f Theta: %f\n", chassis.getPose().x,chassis.getPose().y,chassis.getPose().theta);
 			pros::lcd::print(0, "X: %f", chassis.getPose().x);
 			pros::lcd::print(1, "Y: %f", chassis.getPose().y);
-			pros::lcd::print(2, "Theta: %f", chassis.getPose().theta);
-			// pros::lcd::print(3, "Hot Motors: %s", hotMotors().c_str());
+			pros::lcd::print(2, "Theta: %f", fmod(chassis.getPose().theta, 360));
+			pros::lcd::print(3, "Hot Motors: %s", hotMotors().c_str());
+			if (pros::competition::is_disabled()) {
+				autoSelector();
+				pros::lcd::print(4, "Auton: %s", AUTOS[auton]);
+			} else {pros::lcd::clear_line(4);}
 			pros::delay(500);
 		}
 	});
-
-
-	// autoSelector(); // Not implemented yet
 }
 
-// =========================================================
 // Autonomous routines
-// =========================================================
 void leftAuton() {
-	
+	if (DEBUG) {printf("leftAuton\n");}
 }
 void rightAuton() {
-	
+	if (DEBUG) {printf("rightAuton\n");}
 }
 void skillsAuton() {
-	
+	if (DEBUG) {printf("skillsAuton\n");}
 }
 
+//Run the selected autonimous
 void runAuto() {
+	if (DEBUG) {printf("runAuto\n");}
+	inputsEnabled = false;
 	switch (auton) {
 		case 0: leftAuton(); break;
 		case 1: rightAuton(); break;
@@ -218,13 +226,12 @@ void runAuto() {
 		default: break;
 	}
 	master.rumble(". . .");
+	inputsEnabled = true;
 }
 
-// =========================================================
-// Run match timer and display it along with
-// important information on controller
-// =========================================================
+// Display inportent information on the controler
 void controlerDisplay() {
+	if (DEBUG) {printf("controlerDisplay\n");}
 	int timer = 105000;
 	while (true) {
 		if (pros::competition::is_connected()) {
@@ -234,8 +241,8 @@ void controlerDisplay() {
 			) {
 				master.clear_line(2);
 				master.print(2, 0, "Time (seconds): %d", timer/1000);
-				pros::delay(50);
-				timer -= 50;
+				pros::delay(1000);
+				timer -= 1000;
 				if (timer == 15000) {
 					master.rumble("---");
 				}
@@ -250,54 +257,55 @@ void controlerDisplay() {
 // =========================================================
 // Driver control
 // =========================================================
-void opcontrol() { //TODO: clean all this up
-	pros::Task drive([&]() { //Temporarly using a task 
+void opcontrol() { 
+	if (DEBUG) {printf("opcontrol\n");}
+	inputsEnabled = true;
+	pros::Task drive([&]() {  
 		while (true) {
-			chassis.tank(
-				master.get_analog(ANALOG_LEFT_Y), 
-				master.get_analog(ANALOG_RIGHT_Y));
+			if (inputsEnabled) {
+				chassis.tank(
+					master.get_analog(ANALOG_LEFT_Y), 
+					master.get_analog(ANALOG_RIGHT_Y));
+			}
 			pros::delay(20);
 		}
 	});
+
 	pros::Task condisplay(controlerDisplay);
 
-	while (true) {		
-		if (
-			!pros::competition::is_connected() &&
-			master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && 
-			master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)
-		) {
+	pros::Task startAutoShortcut([&](){
+		while (true) {		
+			if (inputsEnabled) {
+				if (
+					!pros::competition::is_connected() &&
+					master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
+					master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
+				) {
 
-			while (
-				master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT) && 
-				master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)
-			) {
+					while (
+						master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
+						master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
+					) {
 
-				pros::delay(20);
+						pros::delay(20);
+					}
+					runAuto();
+				}
 			}
-
-			autoSelector(true);
+			pros::delay(20);
 		}
+	});
 
-		if (
-			!pros::competition::is_connected() &&
-			master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
-			master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
-		) {
-
-			while (
-				master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
-				master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
-			) {
-
-				pros::delay(20);
-			}
-			runAuto();
+	pros::Task runCascade([&](){
+		int target = 0;
+		while (true) {
+			int error = target - cascade.get_position();
+			cascade.move_voltage(cascadePID.update(error)*1000);
 		}
-		pros::delay(20);
-	}
+	});
 }
 
 void autonomous() {
+	if (DEBUG) {printf("autonomous\n");}
 	runAuto();
 }
