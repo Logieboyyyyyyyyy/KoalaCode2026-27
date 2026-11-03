@@ -1,4 +1,3 @@
-// Include the vector library
 #include "main.h"
 #include "lemlib/api.hpp" // IWYU pragma: keep
 #include "lemlib/chassis/chassis.hpp"
@@ -12,11 +11,12 @@
 #include "pros/misc.h"
 #include "pros/misc.hpp"
 #include "pros/motor_group.hpp"
+#include "pros/motors.h"
+#include "pros/motors.hpp"
 #include "pros/rtos.hpp"
+#include <cstdint>
 #include <cstdio>
 #include <sys/_intsup.h>
-#include <vector>
-
 
 // =========================================================
 // Robot configuration
@@ -25,23 +25,26 @@
 // The main controller used to drive the robot
 pros::Controller master(pros::E_CONTROLLER_MASTER);
 
-pros::MotorGroup cascade({10, -11}, pros::MotorGearset::blue);
+pros::MotorGroup cascade({-6,8}, pros::MotorGearset::green);
+pros::Motor banshee(9, pros::MotorGearset::green);
+pros::Motor shoulder(21, pros::MotorGearset::green);
+pros::Motor intake(18, pros::MotorGearset::green);
 
 // Left and right drive motors for the drivetrain.
-pros::MotorGroup leftDt({1,2,3}, pros::MotorGearset::blue);
-pros::MotorGroup rightDt({4,5,6}, pros::MotorGearset::blue);
+pros::MotorGroup leftDt({-14,-15}, pros::MotorGearset::blue);
+pros::MotorGroup rightDt({2,4}, pros::MotorGearset::blue);
 
 // Sensors for odometry
-pros::Imu imu(7);
-pros::Rotation horizontal(8);
-pros::Rotation vertical(9);
+pros::Imu imu(5);
+// pros::Rotation horizontal(8);
+pros::Rotation vertical(-1);
 
 // Define the rotaion sensors as tracking wheels for odometry.
-lemlib::TrackingWheel horizontalTracker(
-	&horizontal, 
-	lemlib::Omniwheel::NEW_2, 
-	0
-);
+// lemlib::TrackingWheel horizontalTracker(
+// 	&horizontal, 
+// 	lemlib::Omniwheel::NEW_2, 
+// 	0
+// );
 lemlib::TrackingWheel verticalTracker(
 	&vertical, 
 	lemlib::Omniwheel::NEW_2, 
@@ -52,7 +55,8 @@ lemlib::TrackingWheel verticalTracker(
 lemlib::OdomSensors sensors(
 	&verticalTracker, 
 	nullptr,
-	&horizontalTracker, 
+	nullptr,
+	// &horizontalTracker, 
 	nullptr,
 	&imu
 );
@@ -69,37 +73,28 @@ lemlib::Drivetrain drive(
 
 // PID settings for lateral movement
 lemlib::ControllerSettings lateral(
-	10,
+	20,
 	0,
-	3,
-	3,
+	150,
+	0,
 	1,
 	100,
-	3,
-	500,
-	20
-);
-
-// PID settings for angular movement
-lemlib::ControllerSettings angular(
-	3,
-	0,
-	10,
-	3,
-	1,
-	100,
-	3,
+	0.5,
 	500,
 	0
 );
 
-// PID settings for the cascade mechanism
-lemlib::PID cascadePID(
-	1,
+// PID settings for angular movement
+lemlib::ControllerSettings angular(
+	4,
 	0,
+	25,
 	0,
-	0,
-	false
+	.5,
+	100,
+	2,
+	500,
+	0
 );
 
 // input curve for throttle input during driver control
@@ -111,8 +106,8 @@ lemlib::ExpoDriveCurve throttle_curve(
 
 // input curve for steer input during driver control
 lemlib::ExpoDriveCurve steer_curve(
-	3, // joystick deadband out of 127
-    10, // minimum output where drivetrain will move out of 127
+	2, // joystick deadband out of 127
+    5, // minimum output where drivetrain will move out of 127
     1.019 // expo curve gain
 );
 
@@ -126,31 +121,60 @@ lemlib::Chassis chassis(
 	&steer_curve
 );
 
-//Static variables
-bool DEBUG = true;
-std::vector<std::string> AUTOS = {"left", "right", "skills"};
+lemlib::PID cascadePID(0.5, 0, 0);
 
-//Non Static variables
+
+//Constant variables
+const bool DEBUG = true;
+const bool MANUAL_SHOULDER = false;
+const bool MANUAL_CASCADE = false;
+const int THROTTLE_MOD = 0;
+const bool GREYSON = true;
+const float CASCADE_IPD = ((21.0/32.0)*3.14159)*(1.0/360)*3;
+const float SHOULDER_RATIO = 12.0/32.0;
+const int CASCADE_MAX = 36;
+const int CASCADE_POS_COUNT = CASCADE_MAX/3;
+const int CASCADE_SHOULDER_DELAY = 1000;
+const int CASCADE_LOWER_DELAY = 500;
+
+const int PIDTune = 0;
+const std::string AUTOS[] = {"left", "right", "skills"};
+
+//Non Constant variables
+int timer = 105000;
+int cascadeSetpoint = 0;
+bool stationaryish = false;
 int auton = 0;
 bool inputsEnabled = false;
+int shoulderMax = 120;
+int cascadePositions[36/3];
+
 
 // Hot Motor Detection
 std::string hotMotors() {
 	if (DEBUG) {printf("hotMotors\n");}
 	std::string hotMotors = "";
 	for (int i = 0; i < 3; i++) {
-		if (leftDt.is_over_temp(i)) {
+		if (leftDt.is_over_temp(i) && !(leftDt.get_voltage(i) == PROS_ERR)) {
 			hotMotors += "Left-Drivetrain " + std::to_string(i) + " ";
 		}
-		if (rightDt.is_over_temp(i)) {
+		if (rightDt.is_over_temp(i) && !(rightDt.get_voltage(i) == PROS_ERR)) {
 			hotMotors += "Right-Drivetrain " + std::to_string(i) + " ";
 		}
 	}
-	if (cascade.is_over_temp(0)) {
+	if (cascade.is_over_temp(0) && !(cascade.get_voltage(0) == PROS_ERR)) {
 		hotMotors += "Cascade 0";
 	}
-	if (cascade.is_over_temp(1)) {
+	if (cascade.is_over_temp(1) && !(cascade.get_voltage(1) == PROS_ERR)) {
 		hotMotors += "Cascade 1";
+	}
+	if (banshee.is_over_temp() && !(banshee.get_voltage() == PROS_ERR)) {
+		hotMotors += "Banshee ";
+	}
+	if (shoulder.is_over_temp() && !(shoulder.get_voltage() == PROS_ERR)) {
+		hotMotors += "Shoulder ";
+	}
+	if (!(hotMotors == "")) {
 	}
 
 	return hotMotors;
@@ -161,14 +185,14 @@ void autoSelector(){
 	if (pros::lcd::read_buttons() == LCD_BTN_LEFT) {
 		auton--;
 		if (auton < 0) {
-			auton = AUTOS.size()-1;
+			auton = sizeof(AUTOS)-1;
 		}
 		while (pros::lcd::read_buttons() == LCD_BTN_LEFT) {
 			pros::delay(50);
 		}
 	} else if (pros::lcd::read_buttons() == LCD_BTN_RIGHT) {
 		auton++;
-		if (auton > AUTOS.size()-1) {
+		if (auton > sizeof(AUTOS)-1) {
 			auton = 0;
 		}
 		while (pros::lcd::read_buttons() == LCD_BTN_RIGHT) {
@@ -185,7 +209,21 @@ void initialize() {
 
 	// Calibrate the chassis before autonomous/opcontrol begins.
 	chassis.calibrate();
-	cascade.set_zero_position(cascade.get_position());
+	leftDt.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	rightDt.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+
+	// Set the zero position of the cascade and shoulder motors to their current positions.
+	cascade.set_zero_position(0);
+	cascade.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	shoulder.set_zero_position(0);
+	shoulder.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+
+	for (int i = 0; i < CASCADE_POS_COUNT; ++i) {
+		cascadePositions[i] = i * 3;
+	}
+	for (int i = 0; i < CASCADE_POS_COUNT; ++i) {
+		cascadePositions[i] = cascadePositions[i] * CASCADE_IPD;
+	}
 
 	// Background task that continuously prints the robot's current field position.
 	pros::Task displayInfo([&]() {
@@ -202,6 +240,28 @@ void initialize() {
 			pros::delay(500);
 		}
 	});
+}
+
+void driveCascade() {
+	while (true) {
+			pros::delay(20);
+		if (std::abs(cascadePositions[cascadeSetpoint] - cascade.get_position()) < 5) {
+			cascade.move_voltage(cascadePID.update(cascadePositions[cascadeSetpoint] - cascade.get_position()));
+		}
+		pros::delay(20);
+		if (pros::millis() % 1000 < 20) {
+			if (DEBUG) {printf("Cascade Setpoint: %d Cascade Position: %f\n", cascadeSetpoint, cascade.get_position());}
+		}
+	}
+}
+void moveCascade(int change) {
+	cascadeSetpoint += change;
+	if (cascadeSetpoint >= CASCADE_POS_COUNT) {
+		cascadeSetpoint = CASCADE_POS_COUNT - 1;
+	} else if (cascadeSetpoint < 0) {
+		cascadeSetpoint = 0;
+	}
+
 }
 
 // Autonomous routines
@@ -232,7 +292,6 @@ void runAuto() {
 // Display inportent information on the controler
 void controlerDisplay() {
 	if (DEBUG) {printf("controlerDisplay\n");}
-	int timer = 105000;
 	while (true) {
 		if (pros::competition::is_connected()) {
 			if (
@@ -260,52 +319,124 @@ void controlerDisplay() {
 void opcontrol() { 
 	if (DEBUG) {printf("opcontrol\n");}
 	inputsEnabled = true;
-	pros::Task drive([&]() {  
-		while (true) {
-			if (inputsEnabled) {
-				chassis.tank(
-					master.get_analog(ANALOG_LEFT_Y), 
-					master.get_analog(ANALOG_RIGHT_Y));
-			}
-			pros::delay(20);
-		}
-	});
-
 	pros::Task condisplay(controlerDisplay);
+	if (!MANUAL_CASCADE) {
+		pros::Task cascadeTask(driveCascade);
+	}
 
-	pros::Task startAutoShortcut([&](){
-		while (true) {		
-			if (inputsEnabled) {
+	leftDt.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
+	rightDt.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
+
+	enum class CascadeSequenceState {
+		idle,
+		waitingToRaiseShoulder,
+		waitingToLowerCascade
+	};
+	CascadeSequenceState cascadeSequence = CascadeSequenceState::idle;
+	std::uint32_t cascadeSequenceStarted = 0;
+
+	while (true) {
+		const std::uint32_t now = pros::millis();
+		if (cascadeSequence == CascadeSequenceState::waitingToRaiseShoulder &&
+			now - cascadeSequenceStarted >= CASCADE_SHOULDER_DELAY) {
+			shoulder.move_absolute(90 * SHOULDER_RATIO, 200);
+			cascadeSequenceStarted = now;
+			cascadeSequence = CascadeSequenceState::waitingToLowerCascade;
+		} else if (cascadeSequence == CascadeSequenceState::waitingToLowerCascade &&
+			now - cascadeSequenceStarted >= CASCADE_LOWER_DELAY) {
+			moveCascade(-2);
+			cascade.move_absolute(cascadePositions[cascadeSetpoint], 200);
+			cascadeSequence = CascadeSequenceState::idle;
+		}
+
+		imu.get_pitch();
+		if (inputsEnabled) {
+			if (!GREYSON) {
+				chassis.arcade(
+					master.get_analog(ANALOG_LEFT_Y)+THROTTLE_MOD,
+					master.get_analog(ANALOG_RIGHT_X)
+				);
+			} else {
+				chassis.tank(
+					master.get_analog(ANALOG_LEFT_Y)+THROTTLE_MOD, 
+					master.get_analog(ANALOG_RIGHT_Y)+THROTTLE_MOD
+				);
 				if (
 					!pros::competition::is_connected() &&
-					master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
-					master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
+					master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_UP) && 
+					master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_DOWN)
 				) {
-
-					while (
-						master.get_digital(pros::E_CONTROLLER_DIGITAL_UP) && 
-						master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)
-					) {
-
-						pros::delay(20);
-					}
 					runAuto();
 				}
 			}
-			pros::delay(20);
+			if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
+				banshee.move_velocity(200);
+				intake.move_velocity(200);
+			} else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
+				banshee.move_velocity(-200);
+				intake.move_velocity(-200);
+			} else {
+				banshee.move_velocity(0);
+				intake.move_velocity(0);
+			}
 		}
-	});
-
-	pros::Task runCascade([&](){
-		int target = 0;
-		while (true) {
-			int error = target - cascade.get_position();
-			cascade.move_voltage(cascadePID.update(error)*1000);
+		if(MANUAL_SHOULDER && cascadeSequence == CascadeSequenceState::idle){
+			if (inputsEnabled) {
+				if (master.get_digital(pros::E_CONTROLLER_DIGITAL_Y)) {
+					shoulder.move_velocity(200);
+				} else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_B)) {
+					shoulder.move_velocity(-200);
+				} else {
+					shoulder.move_velocity(0);
+				}
+			}
 		}
-	});
+		
+		if (inputsEnabled) {
+			if (!MANUAL_CASCADE) {
+				if (cascadeSequence == CascadeSequenceState::idle &&
+					master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X)) {
+					master.rumble(".");
+					if (cascadeSetpoint == 0) {
+						moveCascade(3);
+						cascadeSequenceStarted = pros::millis();
+						cascadeSequence = CascadeSequenceState::waitingToRaiseShoulder;
+					} else {
+						moveCascade(-1);
+						cascade.move_absolute(cascadePositions[cascadeSetpoint], 200);
+					}
+				} else if (cascadeSequence == CascadeSequenceState::idle &&
+					master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A)) {
+					master.rumble(".");
+					moveCascade(-1);					
+				}
+			} else {
+				if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L1)) {
+					cascade.move_velocity(200);
+				} else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
+					cascade.move_velocity(-200);
+				} else {
+					cascade.move_velocity(0);
+				}
+			}
+		}
+		pros::delay(20);
+	}
 }
 
 void autonomous() {
 	if (DEBUG) {printf("autonomous\n");}
-	runAuto();
+	if (PIDTune == 0){ runAuto();} 
+	else if (PIDTune == 1){
+		chassis.turnToHeading(90, 2000);
+		chassis.turnToHeading(0, 2000);
+		chassis.turnToHeading(180, 2000);
+		chassis.turnToHeading(0, 2000);
+		
+	} else {
+		chassis.moveToPoint(0, 24, 2000);
+		chassis.moveToPoint(0, 0, 2000, {.forwards = false});
+		chassis.moveToPoint(0, 12, 2000);
+		chassis.moveToPoint(0, 0, 2000, {.forwards = false});
+	}
 }
