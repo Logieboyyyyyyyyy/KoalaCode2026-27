@@ -2,7 +2,6 @@
 #include "lemlib/api.hpp" // IWYU pragma: keep
 #include "lemlib/chassis/chassis.hpp"
 #include "lemlib/chassis/trackingWheel.hpp"
-#include "lemlib/pid.hpp"
 #include "liblvgl/llemu.h"
 #include "liblvgl/llemu.hpp"
 #include "pros/abstract_motor.hpp"
@@ -31,13 +30,13 @@ pros::Motor shoulder(21, pros::MotorGearset::green);
 pros::Motor intake(18, pros::MotorGearset::green);
 
 // Left and right drive motors for the drivetrain.
-pros::MotorGroup leftDt({-14,-15}, pros::MotorGearset::blue);
-pros::MotorGroup rightDt({2,4}, pros::MotorGearset::blue);
+pros::MotorGroup leftDt({-1,-2}, pros::MotorGearset::blue);
+pros::MotorGroup rightDt({3,4}, pros::MotorGearset::blue);
 
 // Sensors for odometry
 pros::Imu imu(5);
 // pros::Rotation horizontal(8);
-pros::Rotation vertical(-1);
+pros::Rotation vertical(-11);
 
 // Define the rotaion sensors as tracking wheels for odometry.
 // lemlib::TrackingWheel horizontalTracker(
@@ -121,17 +120,14 @@ lemlib::Chassis chassis(
 	&steer_curve
 );
 
-lemlib::PID cascadePID(0.5, 0, 0);
-
-
 //Constant variables
 const bool DEBUG = true;
-const bool MANUAL_SHOULDER = false;
-const bool MANUAL_CASCADE = false;
+const bool MANUAL_SHOULDER = true;
+const bool MANUAL_CASCADE = true;
 const int THROTTLE_MOD = 0;
 const bool GREYSON = true;
-const float CASCADE_IPD = ((21.0/32.0)*3.14159)*(1.0/360)*3;
-const float SHOULDER_RATIO = 12.0/32.0;
+const float CASCADE_IPD = ((21.0/32.0)*3.14159)*(1.0/360);
+const float SHOULDER_RATIO = 12.0/36.0;
 const int CASCADE_MAX = 36;
 const int CASCADE_POS_COUNT = CASCADE_MAX/3;
 const int CASCADE_SHOULDER_DELAY = 1000;
@@ -219,10 +215,7 @@ void initialize() {
 	shoulder.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 
 	for (int i = 0; i < CASCADE_POS_COUNT; ++i) {
-		cascadePositions[i] = i * 3;
-	}
-	for (int i = 0; i < CASCADE_POS_COUNT; ++i) {
-		cascadePositions[i] = cascadePositions[i] * CASCADE_IPD;
+		cascadePositions[i] = static_cast<int>((i * 3.0) / CASCADE_IPD);
 	}
 
 	// Background task that continuously prints the robot's current field position.
@@ -242,18 +235,6 @@ void initialize() {
 	});
 }
 
-void driveCascade() {
-	while (true) {
-			pros::delay(20);
-		if (std::abs(cascadePositions[cascadeSetpoint] - cascade.get_position()) < 5) {
-			cascade.move_voltage(cascadePID.update(cascadePositions[cascadeSetpoint] - cascade.get_position()));
-		}
-		pros::delay(20);
-		if (pros::millis() % 1000 < 20) {
-			if (DEBUG) {printf("Cascade Setpoint: %d Cascade Position: %f\n", cascadeSetpoint, cascade.get_position());}
-		}
-	}
-}
 void moveCascade(int change) {
 	cascadeSetpoint += change;
 	if (cascadeSetpoint >= CASCADE_POS_COUNT) {
@@ -261,12 +242,17 @@ void moveCascade(int change) {
 	} else if (cascadeSetpoint < 0) {
 		cascadeSetpoint = 0;
 	}
-
+	// cascade.move_absolute(cascadePositions[cascadeSetpoint], 200);
 }
 
 // Autonomous routines
 void leftAuton() {
 	if (DEBUG) {printf("leftAuton\n");}
+	leftDt.move_velocity(200);
+	rightDt.move_velocity(200);
+	pros::delay(500);
+	leftDt.brake();
+	rightDt.brake();	
 }
 void rightAuton() {
 	if (DEBUG) {printf("rightAuton\n");}
@@ -320,9 +306,6 @@ void opcontrol() {
 	if (DEBUG) {printf("opcontrol\n");}
 	inputsEnabled = true;
 	pros::Task condisplay(controlerDisplay);
-	if (!MANUAL_CASCADE) {
-		pros::Task cascadeTask(driveCascade);
-	}
 
 	leftDt.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
 	rightDt.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
@@ -339,13 +322,12 @@ void opcontrol() {
 		const std::uint32_t now = pros::millis();
 		if (cascadeSequence == CascadeSequenceState::waitingToRaiseShoulder &&
 			now - cascadeSequenceStarted >= CASCADE_SHOULDER_DELAY) {
-			shoulder.move_absolute(90 * SHOULDER_RATIO, 200);
+			shoulder.move_absolute(180 / SHOULDER_RATIO, 200);
 			cascadeSequenceStarted = now;
 			cascadeSequence = CascadeSequenceState::waitingToLowerCascade;
 		} else if (cascadeSequence == CascadeSequenceState::waitingToLowerCascade &&
 			now - cascadeSequenceStarted >= CASCADE_LOWER_DELAY) {
 			moveCascade(-2);
-			cascade.move_absolute(cascadePositions[cascadeSetpoint], 200);
 			cascadeSequence = CascadeSequenceState::idle;
 		}
 
@@ -393,7 +375,7 @@ void opcontrol() {
 		}
 		
 		if (inputsEnabled) {
-			if (!MANUAL_CASCADE) {
+			if (true) {
 				if (cascadeSequence == CascadeSequenceState::idle &&
 					master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X)) {
 					master.rumble(".");
@@ -402,15 +384,13 @@ void opcontrol() {
 						cascadeSequenceStarted = pros::millis();
 						cascadeSequence = CascadeSequenceState::waitingToRaiseShoulder;
 					} else {
-						moveCascade(-1);
-						cascade.move_absolute(cascadePositions[cascadeSetpoint], 200);
+						moveCascade(1);
 					}
 				} else if (cascadeSequence == CascadeSequenceState::idle &&
 					master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A)) {
 					master.rumble(".");
 					moveCascade(-1);					
 				}
-			} else {
 				if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L1)) {
 					cascade.move_velocity(200);
 				} else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
